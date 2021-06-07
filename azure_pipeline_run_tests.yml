@@ -1,0 +1,61 @@
+# Starter pipeline
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
+trigger:
+- 
+
+variables:
+  databricks-host: 'https://francecentral.azuredatabricks.net'
+  notebook-folder: '/cicd_notebooks/ingestion/tests'
+  cluster-id: '1213-122532-flied520'
+  notebook-name: '_master_test'
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+- script: pip install databricks-cli
+  displayName: "install databricks-cli"
+
+- script: |
+    echo "$(databricks-host)
+    $(databricks-token)" | databricks configure --token
+  displayName: 'configure databricks-cli'
+
+- script: |
+   databricks workspace import_dir ./cicd_notebooks/ /cicd_notebooks/ -o
+
+   JOB_ID=$(databricks jobs create --json '{
+     "name": "Master Test run",
+     "existing_cluster_id": "$(cluster-id)",
+     "timeout_seconds": 3600,
+     "max_retries": 1,
+     "notebook_task": {
+       "notebook_path": "$(notebook-folder)/$(notebook-name)",
+       "base_parameters": {}
+     }
+   }' | jq '.job_id')
+
+   RUN_ID=$(databricks jobs run-now --job-id $JOB_ID | jq '.run_id')
+
+   job_status="PENDING"
+   while [ $job_status = "RUNNING" ] || [ $job_status = "PENDING" ]
+   do
+     sleep 2
+     job_status=$(databricks runs get --run-id $RUN_ID | jq -r '.state.life_cycle_state')
+     echo Status $job_status
+   done
+
+   RESULT=$(databricks runs get-output --run-id $RUN_ID)
+
+   RESULT_STATE=$(echo $RESULT | jq -r '.metadata.state.result_state')
+   RESULT_MESSAGE=$(echo $RESULT | jq -r '.metadata.state.state_message')
+   if [ $RESULT_STATE = "FAILED" ]
+   then
+     echo "##vso[task.logissue type=error;]$RESULT_MESSAGE"
+     echo "##vso[task.complete result=Failed;done=true;]$RESULT_MESSAGE"
+   fi
+
+   echo $RESULT | jq .
+  displayName: 'run databricks project tests'
